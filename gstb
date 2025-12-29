@@ -1,0 +1,136 @@
+import tkinter as tk
+from tkinter import ttk
+import subprocess
+import threading
+import time
+import os
+from pysnmp.hlapi import *
+
+# Đường dẫn file danh sách thiết bị
+FILE_PATH = r"D:\danhsach.txt"
+
+# Hàm kiểm tra trạng thái bằng ping (fallback)
+def check_status_ping(ip):
+    try:
+        # Ping 1 lần, timeout 1 giây (cho Windows)
+        output = subprocess.check_output(["ping", "-n", "1", "-w", "1000", ip])
+        return "Online" if "Reply from" in str(output) else "Offline"
+    except subprocess.CalledProcessError:
+        return "Offline"
+
+# Hàm kiểm tra trạng thái chính: SNMP trước, fallback ping nếu SNMP thất bại
+def check_status(ip):
+    try:
+        errorIndication, errorStatus, errorIndex, varBinds = next(
+            getCmd(SnmpEngine(),
+                CommunityData('public', mpModel=0),  # Community mặc định 'public', version SNMPv1
+                UdpTransportTarget((ip, 161)),
+                ContextData(),
+                ObjectType(ObjectIdentity('1.3.6.1.2.1.1.3.0'))  # OID cho sysUpTime
+            )
+        )
+        if errorIndication or errorStatus:
+            return check_status_ping(ip)  # Fallback ping nếu SNMP lỗi
+        else:
+            return "Online"
+    except Exception:
+        return check_status_ping(ip)  # Fallback ping nếu exception
+
+# Lớp chính cho ứng dụng giám sát
+class DeviceMonitor:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Giám Sát Thiết Bị")
+        
+        # Danh sách thiết bị: list of dict {name, ip, status, update_time}
+        self.devices = []
+        
+        # Tạo frame cho bảng và thanh cuộn
+        tree_frame = tk.Frame(root)
+        tree_frame.pack(fill=tk.BOTH, expand=True)
+        
+        # Tạo thanh cuộn bên phải
+        self.scrollbar = ttk.Scrollbar(tree_frame, orient="vertical")
+        self.scrollbar.pack(side="right", fill="y")
+        
+        # Tạo bảng hiển thị
+        self.tree = ttk.Treeview(tree_frame, columns=("STT", "Tên", "IP", "Trạng Thái", "Cập nhật lúc"), show="headings",
+                                 yscrollcommand=self.scrollbar.set)
+        self.tree.heading("STT", text="STT")
+        self.tree.heading("Tên", text="Tên Thiết Bị")
+        self.tree.heading("IP", text="IP")
+        self.tree.heading("Trạng Thái", text="Trạng Thái")
+        self.tree.heading("Cập nhật lúc", text="Cập nhật lúc")
+        
+        # Canh giữa nội dung trong các cột
+        self.tree.column("STT", anchor='center', width=50)
+        self.tree.column("Tên", anchor='center')
+        self.tree.column("IP", anchor='center')
+        self.tree.column("Trạng Thái", anchor='center')
+        self.tree.column("Cập nhật lúc", anchor='center', width=120)
+        
+        # Kết nối thanh cuộn với bảng
+        self.scrollbar.config(command=self.tree.yview)
+        
+        self.tree.pack(side="left", fill=tk.BOTH, expand=True)
+        
+        # Cấu hình màu cho tag
+        self.tree.tag_configure('online', foreground='green')
+        self.tree.tag_configure('offline', foreground='red')
+        
+        # Thêm nút tải lại
+        reload_button = tk.Button(root, text="Tải Lại Danh Sách", command=self.load_devices)
+        reload_button.pack(pady=10)
+        
+        # Tải danh sách từ file sau khi tree đã tạo
+        self.load_devices()
+        
+        # Bắt đầu thread cập nhật trạng thái
+        self.running = True
+        self.update_thread = threading.Thread(target=self.update_status_loop)
+        self.update_thread.daemon = True
+        self.update_thread.start()
+    
+    def load_devices(self):
+        self.devices = []
+        if os.path.exists(FILE_PATH):
+            with open(FILE_PATH, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        parts = line.split(",")
+                        if len(parts) == 2:
+                            name = parts[0].strip()
+                            ip = parts[1].strip()
+                            self.devices.append({"name": name, "ip": ip, "status": "Checking...", "update_time": "--"})
+        self.update_table()
+    
+    def update_table(self):
+        # Xóa bảng cũ
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        
+        # Thêm dữ liệu mới với màu và STT
+        for idx, device in enumerate(self.devices, 1):
+            tag = 'online' if device["status"] == "Online" else 'offline'
+            self.tree.insert("", "end", values=(idx, device["name"], device["ip"], device["status"], device["update_time"]), tags=(tag,))
+    
+    def update_status_loop(self):
+        while self.running:
+            current_time = time.strftime("%H:%M:%S")  # Thời gian hiện tại
+            for device in self.devices:
+                device["status"] = check_status(device["ip"])
+                device["update_time"] = current_time  # Cập nhật thời gian cho từng thiết bị
+            self.root.after(0, self.update_table)  # Cập nhật GUI từ thread chính
+            time.sleep(5)  # Cập nhật mỗi 5 giây
+    
+    def on_closing(self):
+        self.running = False
+        self.root.destroy()
+
+# Chạy ứng dụng
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = DeviceMonitor(root)
+    root.protocol("WM_DELETE_WINDOW", app.on_closing)
+    root.mainloop()
