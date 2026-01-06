@@ -42,7 +42,7 @@ class DeviceMonitor:
         self.root = root
         self.root.title("Giám Sát Thiết Bị")
         
-        # Danh sách thiết bị: list of dict {name, ip, status, update_time}
+        # Danh sách thiết bị: list of dict {name, ip, status, update_time, status_time, previous_status}
         self.devices = []
         
         # Tạo frame cho bảng và thanh cuộn
@@ -54,13 +54,14 @@ class DeviceMonitor:
         self.scrollbar.pack(side="right", fill="y")
         
         # Tạo bảng hiển thị
-        self.tree = ttk.Treeview(tree_frame, columns=("STT", "Tên", "IP", "Trạng Thái", "Cập nhật lúc"), show="headings",
+        self.tree = ttk.Treeview(tree_frame, columns=("STT", "Tên", "IP", "Trạng Thái", "Cập nhật lúc", "Thời gian Trạng thái"), show="headings",
                                  yscrollcommand=self.scrollbar.set)
         self.tree.heading("STT", text="STT")
         self.tree.heading("Tên", text="Tên Thiết Bị")
         self.tree.heading("IP", text="IP")
         self.tree.heading("Trạng Thái", text="Trạng Thái")
         self.tree.heading("Cập nhật lúc", text="Cập nhật lúc")
+        self.tree.heading("Thời gian Trạng thái", text="Thời gian Trạng thái")
         
         # Canh giữa nội dung trong các cột
         self.tree.column("STT", anchor='center', width=50)
@@ -68,6 +69,7 @@ class DeviceMonitor:
         self.tree.column("IP", anchor='center')
         self.tree.column("Trạng Thái", anchor='center')
         self.tree.column("Cập nhật lúc", anchor='center', width=120)
+        self.tree.column("Thời gian Trạng thái", anchor='center', width=150)
         
         # Kết nối thanh cuộn với bảng
         self.scrollbar.config(command=self.tree.yview)
@@ -102,7 +104,7 @@ class DeviceMonitor:
                         if len(parts) == 2:
                             name = parts[0].strip()
                             ip = parts[1].strip()
-                            self.devices.append({"name": name, "ip": ip, "status": "Checking...", "update_time": "--"})
+                            self.devices.append({"name": name, "ip": ip, "status": "Checking...", "update_time": "--", "status_time": "--", "previous_status": None})
         self.update_table()
     
     def update_table(self):
@@ -113,14 +115,18 @@ class DeviceMonitor:
         # Thêm dữ liệu mới với màu và STT
         for idx, device in enumerate(self.devices, 1):
             tag = 'online' if device["status"] == "Online" else 'offline'
-            self.tree.insert("", "end", values=(idx, device["name"], device["ip"], device["status"], device["update_time"]), tags=(tag,))
+            self.tree.insert("", "end", values=(idx, device["name"], device["ip"], device["status"], device["update_time"], device["status_time"]), tags=(tag,))
     
     def update_status_loop(self):
         while self.running:
             current_time = time.strftime("%H:%M:%S")  # Thời gian hiện tại
             for device in self.devices:
-                device["status"] = check_status(device["ip"])
-                device["update_time"] = current_time  # Cập nhật thời gian cho từng thiết bị
+                new_status = check_status(device["ip"])
+                if new_status != device["previous_status"]:
+                    device["status_time"] = current_time
+                device["previous_status"] = new_status
+                device["status"] = new_status
+                device["update_time"] = current_time  # Cập nhật thời gian cập nhật
             self.root.after(0, self.update_table)  # Cập nhật GUI từ thread chính
             time.sleep(5)  # Cập nhật mỗi 5 giây
     
